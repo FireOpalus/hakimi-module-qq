@@ -18,6 +18,8 @@ class QQSocialModule(BaseModule):
     """Summarizes active QQ transport and group ring activity without leaking private content."""
 
     module_id: str = "qq_social"
+    display_name = "QQ 社交"
+    description = "OneBot 连接、群聊管理与主动私信"
     schedule_options = QQScheduleOptions
     recipient_namespaces = ("owner", "onebot")
     node_region: NodeRegion = "KR"
@@ -53,6 +55,11 @@ class QQSocialModule(BaseModule):
             self.speak = LifeSpeaker(service).speak
             self.preflight = QQPolicy(service).evaluate
             self.connected = service.proactive.connected
+
+    def admin_status(self, request):
+        from ..admin_routes import onebot_connection
+
+        return onebot_connection(request, request.app.state.service)
 
     async def on_switch(self, service):
         if not self.enabled:
