@@ -430,8 +430,16 @@ class WebSocketTransport:
                 task.result()
         except asyncio.CancelledError:
             raise
-        except Exception:
-            logging.getLogger("hakimi").info("event=onebot_connection_ended")
+        except Exception as exc:
+            raw_code = str(exc).strip()
+            reason = (
+                raw_code
+                if isinstance(exc, Rejected) and re.fullmatch(r"[a-z0-9_]{1,64}", raw_code)
+                else type(exc).__name__
+            )
+            log = logging.getLogger("hakimi")
+            log.info("event=onebot_connection_ended")
+            log.info("onebot_connection_ended_detail reason=%s", reason)
         finally:
             peer.ready.clear()
             for future in list(peer.pending.values()):

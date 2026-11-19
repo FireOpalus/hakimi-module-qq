@@ -131,6 +131,8 @@ def farewell_send_bypass(message: Message):
 
 
 class Sender:
+    REPLY_RECONNECT_WAIT_SECONDS = 10.0
+
     def __init__(
         self, settings: Settings, client: httpx.AsyncClient, onebot: OneBotTransport | None = None
     ):
@@ -185,6 +187,37 @@ class Sender:
             self.token, self.token_expires = data["access_token"], time.monotonic() + expires - 30
             return self.token
 
+    async def _call_onebot_reply(
+        self,
+        action: str,
+        params: dict,
+        *,
+        before_send=None,
+        max_wait: float | None = None,
+    ):
+        if before_send is not None and not await before_send():
+            raise Rejected("reply_invalidated")
+        wait = self.REPLY_RECONNECT_WAIT_SECONDS if max_wait is None else max(0.0, float(max_wait))
+        if wait <= 0 or not hasattr(self.onebot, "send_onebot_action_with_retry"):
+            return await self.onebot.call(action, params)
+        revoked = False
+
+        async def guard():
+            nonlocal revoked
+            if before_send is not None and not await before_send():
+                revoked = True
+                return False
+            return True
+
+        try:
+            return await self.onebot.send_onebot_action_with_retry(
+                action, params, before_send=guard, max_wait=wait, attempts=3
+            )
+        except Rejected as exc:
+            if str(exc) == "onebot_not_dispatched" and revoked:
+                raise Rejected("reply_invalidated") from None
+            raise
+
     async def send(
         self, message: Message, text: str, proactive: bool = False, *, before_send=None
     ) -> dict | None:
@@ -220,9 +253,18 @@ class Sender:
                 p["type"] == "at" or p.get("data", {}).get("text", "").strip() for p in parts
             ):
                 raise Rejected("empty_reply")
-            return await self.onebot.call(
+
+            async def still_valid():
+                return (
+                    (before_send is None or await before_send())
+                    and self._authorized(message)
+                    and time.time() - message.created_at <= self.s.event_ttl_seconds
+                )
+
+            return await self._call_onebot_reply(
                 "send_group_msg",
                 {"group_id": int(message.conversation_id), "auto_escape": True, "message": parts},
+                before_send=still_valid,
             )
 
     async def quick_ack(self, message, text, *, before_send):
@@ -231,7 +273,9 @@ class Sender:
             async with self.send_lock:
                 if not await before_send():
                     return
-                return await self._send_once(message, text, False, before_send=before_send)
+                return await self._send_once(
+                    message, text, False, before_send=before_send, retry_wait=0.0
+                )
 
     async def typing(self, message):
         if message.platform != "onebot" or message.kind != "private":
@@ -274,9 +318,11 @@ class Sender:
                     part["data"]["text"] = safe_output(
                         part["data"]["text"], configured_secrets(self.s), limit=6000
                     )
-            if not await before_send():
-                raise Rejected("reply_invalidated")
-            return await self.onebot.call(
+
+            async def still_valid():
+                return bool(await before_send() and self._authorized(message))
+
+            return await self._call_onebot_reply(
                 "send_group_msg" if message.kind == "group" else "send_private_msg",
                 {
                     "group_id" if message.kind == "group" else "user_id": int(
@@ -285,6 +331,7 @@ class Sender:
                     "auto_escape": True,
                     "message": parts,
                 },
+                before_send=still_valid,
             )
 
     async def send_folded(self, message, text, *, before_send):
@@ -292,10 +339,12 @@ class Sender:
             raise Rejected("forward_group_only")
         text = safe_output(text, configured_secrets(self.s), limit=8000)
         async with self.send_lock:
-            if not await before_send() or not self._authorized(message):
-                raise Rejected("reply_invalidated")
+
+            async def still_valid():
+                return bool(await before_send() and self._authorized(message))
+
             try:
-                return await self.onebot.call(
+                return await self._call_onebot_reply(
                     "send_group_forward_msg",
                     {
                         "group_id": int(message.conversation_id),
@@ -310,6 +359,7 @@ class Sender:
                             }
                         ],
                     },
+                    before_send=still_valid,
                 )
             except Rejected as exc:
                 if str(exc) != "onebot_action_unsupported":
@@ -376,25 +426,27 @@ class Sender:
         if not raw or len(raw) > 5 * 1024 * 1024 or not valid_magic:
             raise Rejected("invalid_meme_image")
         async with self.send_lock:
-            if before_send is not None and not await before_send():
-                raise Rejected("reply_invalidated")
-            if (
-                not authorize(message, self.s)
-                or time.time() - message.created_at > self.s.event_ttl_seconds
-            ):
-                raise Rejected("reply_invalidated")
+
+            async def still_valid():
+                return (
+                    (before_send is None or await before_send())
+                    and authorize(message, self.s)
+                    and time.time() - message.created_at <= self.s.event_ttl_seconds
+                )
+
             action = "send_group_msg" if message.kind == "group" else "send_private_msg"
             field = "group_id" if message.kind == "group" else "user_id"
             seg_data: dict[str, str | int] = {"file": data}
             if as_sticker:
                 seg_data["summary"] = "[动画表情]"
                 seg_data["sub_type"] = 1
-            receipt = await self.onebot.call(
+            receipt = await self._call_onebot_reply(
                 action,
                 {
                     field: int(message.conversation_id),
                     "message": [{"type": "image", "data": seg_data}],
                 },
+                before_send=still_valid,
             )
             if (
                 not isinstance(receipt, dict)
@@ -469,7 +521,13 @@ class Sender:
         return await self.onebot.call("get_forward_msg", {"id": identifier(forward_id)})
 
     async def _send_once(
-        self, message: Message, text: str, proactive: bool, *, before_send=None
+        self,
+        message: Message,
+        text: str,
+        proactive: bool,
+        *,
+        before_send=None,
+        retry_wait: float | None = None,
     ) -> dict | None:
         # Recheck current configuration before every delivery, including restored outbox jobs.
         if not self._authorized(message, proactive=proactive):
@@ -509,6 +567,18 @@ class Sender:
 
                 receipt = await self.onebot.send_onebot_action_with_retry(
                     action, params, before_send=still_owner
+                )
+            elif not proactive:
+
+                async def still_valid():
+                    return (
+                        (before_send is None or await before_send())
+                        and self._authorized(message, proactive=False)
+                        and time.time() - message.created_at <= self.s.event_ttl_seconds
+                    )
+
+                receipt = await self._call_onebot_reply(
+                    action, params, before_send=still_valid, max_wait=retry_wait
                 )
             else:
                 if proactive and before_send is not None and not await before_send():
