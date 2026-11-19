@@ -10,7 +10,7 @@ from datetime import datetime
 
 import httpx
 
-from ..attention import direct_attention
+from ..attention import classify_attention
 from ..config import Settings
 from ..http_json import bounded_json
 from ..mentions import revalidate_segments
@@ -50,12 +50,7 @@ def onebot_message(payload: dict, settings: Settings) -> Message | None:
     rich = parse_message(payload.get("message"), bot, max_chars=settings.max_message_chars)
     if not rich.text:
         return None
-    reason = direct_attention(
-        kind,
-        mentioned=rich.addressed,
-        text=rich.command_text,
-        has_video=bool(rich.video_ids or rich.short_urls),
-    )
+    reason, addressed = classify_attention(kind, mentioned=rich.addressed, text=rich.command_text)
     return Message(
         platform="onebot",
         bot_id=bot,
@@ -68,7 +63,7 @@ def onebot_message(payload: dict, settings: Settings) -> Message | None:
         mentioned_ids=rich.mentioned_ids,
         reply_ids=rich.reply_ids,
         attention_reason=reason,
-        addressed=bool(reason),
+        addressed=addressed,
         images=rich.images,
         files=rich.files,
         video_ids=rich.video_ids,

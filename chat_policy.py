@@ -54,7 +54,7 @@ def qq_authorize(message, settings, *, _bot_exempt=False):
     return (
         message.conversation_id in groups
         and policy != "muted"
-        and (message.addressed or policy == "smart_reply")
+        and (message.invites_group_review or policy == "smart_reply")
     )
 
 
