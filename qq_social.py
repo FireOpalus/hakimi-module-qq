@@ -8,6 +8,7 @@ from typing import Any
 from ..budget_policy import PROACTIVE_LANE
 from ..config import Settings
 from ..hot_ring import HotRing
+from ..thinking_policy import THINKING_LEVELS, ThinkingScene
 from .actions import Action, ActionCall, DailyAction, DailyReceipt, Handler, Outcome
 from .base import AttentionLevel, BaseModule, GoalResult, NodeRegion
 from .qq_schedule import QQScheduleOptions
@@ -18,6 +19,24 @@ class QQSocialModule(BaseModule):
     """Summarizes active QQ transport and group ring activity without leaking private content."""
 
     module_id: str = "qq_social"
+    thinking_scenes = (
+        ThinkingScene(
+            "fast_chat",
+            "群聊与普通好友",
+            "auto",
+            ("auto", *THINKING_LEVELS),
+            output_cap="chat_output_tokens",
+        ),
+        ThinkingScene(
+            "owner_private",
+            "Owner 私聊",
+            "auto",
+            ("auto", *THINKING_LEVELS),
+            output_cap="owner_output_tokens",
+        ),
+        ThinkingScene("owner_digest", "Owner 每日汇报", output_tokens=4096),
+        ThinkingScene("owner_companion", "日常陪伴", output_tokens=512),
+    )
     display_name = "QQ 社交"
     description = "OneBot 连接、群聊管理与主动私信"
     schedule_options = QQScheduleOptions

@@ -232,7 +232,6 @@ class OwnerProactive:
             if (
                 not engine.config.enabled
                 or engine.config.action_modes.get("qq.owner_digest") == "off"
-                or not engine.config.is_active_time(local)
                 or engine.config.quiet(local)
                 or self.store.runtime.is_resting(now)
                 or (automatic and not engine.digest_due(now))
