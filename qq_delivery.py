@@ -157,7 +157,7 @@ class LifeSpeaker:
         payload.update(await self.service.modules.context_data(limit=3, now=ts, message=target_msg))
 
         if private_owner:
-            if not call.evidence:
+            if not call.evidence and self.service.proactive.matches(target_msg):
                 payload["companion_context"] = await self.service.proactive.companion_context(ts)
             cloud_mem = getattr(self.service, "cloud_memory", None)
             if cloud_mem is not None:

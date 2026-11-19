@@ -37,6 +37,8 @@ class QQSocialModule(BaseModule):
         ThinkingScene("owner_digest", "Owner 每日汇报", output_tokens=4096),
         ThinkingScene("owner_companion", "日常陪伴", output_tokens=512),
     )
+    chat_platforms = ("onebot", "qq")
+    admin_panel = "qq"
     display_name = "QQ 社交"
     description = "OneBot 连接、群聊管理与主动私信"
     schedule_options = QQScheduleOptions
@@ -73,7 +75,22 @@ class QQSocialModule(BaseModule):
             self.digest = service.proactive.world_digest
             self.speak = LifeSpeaker(service).speak
             self.preflight = QQPolicy(service).evaluate
-            self.connected = service.proactive.connected
+            self.connected = service.proactive.onebot_connected
+
+    def authorize_chat(self, message, settings, *, bot_exempt=False):
+        from hakimi.modules.platforms.qq.chat_policy import qq_authorize
+
+        return qq_authorize(message, settings, _bot_exempt=bot_exempt)
+
+    def permits_chat_export(self, message, consumer):
+        from hakimi.modules.platforms.qq.chat_policy import permits_chat_export
+
+        return permits_chat_export(message, consumer)
+
+    def permits_memory_mirror(self, message, settings):
+        from hakimi.modules.platforms.qq.chat_policy import permits_memory_mirror
+
+        return permits_memory_mirror(message, settings)
 
     def admin_status(self, request):
         from ..admin_routes import onebot_connection
@@ -82,14 +99,7 @@ class QQSocialModule(BaseModule):
 
     async def on_switch(self, service):
         if not self.enabled:
-            async with service.store.transaction():
-                await service.store.db.execute(
-                    "UPDATE jobs SET status='cancelled',payload=NULL "
-                    "WHERE kind='message' AND status='pending'"
-                )
-                await service.store.db.execute(
-                    "UPDATE outbox SET status='cancelled',payload=NULL WHERE status='pending'"
-                )
+            await service.store.cancel_platform_work(self.chat_platforms)
             await service.proactive._expire_and_disable()
         service.proactive.wakeup.set()
 
@@ -171,7 +181,12 @@ class QQSocialModule(BaseModule):
         ]
 
     def schedules(self):
-        if self.settings and self.settings.onebot_enabled and self.settings.owner_qq_id:
+        if (
+            self.settings
+            and self.settings.owner_delivery_platform == "onebot"
+            and self.settings.onebot_enabled
+            and self.settings.owner_qq_id
+        ):
             return (
                 DailyAction(
                     "qq.owner_digest",
@@ -195,7 +210,10 @@ class QQSocialModule(BaseModule):
         return _normalize_target_scope(scope, self.settings) if self.settings else None
 
     def permits_recipient(self, scope, config):
-        return not scope.startswith("owner:") or self.scheduling(config).owner_delivery_enabled
+        return not scope.startswith("owner:") or (
+            self.settings.owner_delivery_platform == "onebot"
+            and self.scheduling(config).owner_delivery_enabled
+        )
 
     async def planning_context(self, service, config, now):
         from .qq_audience import _allowlisted_groups
@@ -251,7 +269,7 @@ class QQSocialModule(BaseModule):
         return None
 
     def event_rules(self):
-        from ..life_rules import milestone_sharing
+        from hakimi.modules.platforms.qq.milestones import milestone_sharing
 
         return (milestone_sharing(self.settings),)
 

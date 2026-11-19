@@ -208,7 +208,11 @@ class Longnick:
         direct = message.command_text if message.command_text is not None else message.text
         if not re.match(r"^/set-sign(?:\s|$)", direct):
             return None
-        if message.kind != "private" or not is_persona_owner(message, self.s):
+        if (
+            message.platform != "onebot"
+            or message.kind != "private"
+            or not is_persona_owner(message, self.s)
+        ):
             raise Rejected("owner_private_only")
         raw = direct[len("/set-sign") :].strip()
         if not raw:

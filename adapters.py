@@ -148,7 +148,7 @@ class Sender:
         self.token_lock = asyncio.Lock()
 
     def _authorized(self, message: Message, *, proactive: bool = False) -> bool:
-        if not self.module_enabled():
+        if message.platform not in {"onebot", "qq"} or not self.module_enabled():
             return False
         if authorize(message, self.s):
             return True
