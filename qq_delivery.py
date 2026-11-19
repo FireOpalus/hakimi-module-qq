@@ -115,7 +115,7 @@ class LifeSpeaker:
                 if len(batch_affection) >= 6:
                     break
 
-        ws_summary = await ws.chat_sensor_payload()
+        ws_summary = await ws.chat_sensor_payload(target_msg)
         jit_intent: dict[str, Any] = {
             "intent_id": intent_id,
             "target_module": target_module,
