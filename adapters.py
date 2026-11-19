@@ -539,6 +539,7 @@ class Sender:
             )
             if data.get("code", 0) != 0 or data.get("err_code", 0) != 0 or not data.get("id"):
                 raise Rejected("qq_send_failed")
+            return {"message_id": data["id"]}
 
 
 def notice_message(payload, settings):
