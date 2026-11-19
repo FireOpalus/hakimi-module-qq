@@ -376,18 +376,7 @@ class OwnerProactive:
         # Read the same public diary data; never call render/generation or any Session here.
         diary = self.service.diary
         if diary and self.s.roaming_timezone == self.s.bot_timezone:
-            async with self.store.lock:
-                counts = dict(
-                    await self.store.all("SELECT kind,n FROM roaming_counts WHERE day=?", (day,))
-                )
-                rows = await self.store.all(
-                    "SELECT id,payload,event_kind FROM roaming_events WHERE day=? "
-                    "AND event_kind IN ('patrol','world_life') ORDER BY rowid",
-                    (day,),
-                )
-            counts.pop("private_chat", None)
-            payload.update(diary._summary_input(day, counts, rows))
-            payload["group_activity"].pop("私聊日常交流", None)
+            payload.update(await diary.public_digest(day))
         if not payload["public_summaries"]:
             subject = self.store.subject(self.target())
             async with self.store.lock:
