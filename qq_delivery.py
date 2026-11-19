@@ -18,8 +18,9 @@ from .qq_audience import _scope_to_message
 from .qq_policy import QQPolicy
 
 JIT_TRIGGER_MESSAGE = (
-    "[系统主动意图触发：请结合 jit_proactive_intent 与最新上下文自然临场发言，"
-    "若当前语境不适合插话请将 abstain 设为 true]"
+    "[系统主动意图触发：这是你自己先前排定的主动发言时刻。请结合 "
+    "jit_proactive_intent、待分享见闻与近期上下文，用自然松弛的口语开口；"
+    "私聊可自然开启新话头或挂念日常，群聊若正逢严肃争执或完全插不上嘴可将 abstain 设为 true]"
 )
 
 

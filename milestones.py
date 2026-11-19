@@ -25,7 +25,7 @@ def milestone_sharing(settings) -> Rule:
             return None
         return Reaction(
             "qq.speak",
-            "结合近期活动分享重要进展",
+            "刚遇到一件挺有意思的新动态，看气氛顺嘴跟群友或 BOISER 唠两句",
             recipient,
             delay=90,
             legacy_module=ev.source_module,

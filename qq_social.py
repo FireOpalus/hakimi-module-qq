@@ -128,7 +128,10 @@ class QQSocialModule(BaseModule):
         return (
             Action(
                 name="qq.speak",
-                description="结合最新会话向获准的群或 Owner 临场发言",
+                description=(
+                    "结合近期见闻、B 站冲浪收获或当前会话，去获准的群聊冒泡接话，"
+                    "或给 BOISER 发条日常私聊"
+                ),
                 social=True,
                 budget_lane=PROACTIVE_LANE,
                 window="active",
@@ -145,7 +148,7 @@ class QQSocialModule(BaseModule):
             ),
             Action(
                 name="qq.owner_digest",
-                description="在活跃时段结束前汇总当天的公开巡逻记录，投递到 Owner 私聊",
+                description="在每晚活跃时段结束前汇总当天的公开冲浪见闻，发给 BOISER 私聊晚安汇报",
                 social=True,
                 owner_only=True,
                 budget_lane=PROACTIVE_LANE,
