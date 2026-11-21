@@ -38,6 +38,8 @@ class QQSocialModule(BaseModule):
         ThinkingScene("owner_companion", "日常陪伴", output_tokens=512),
     )
     chat_platforms = ("onebot", "qq")
+    supports_voice = True
+    preferred_voice_format = "mp3"
     admin_panel = "qq"
     display_name = "QQ 社交"
     description = "OneBot 连接、群聊管理与主动私信"

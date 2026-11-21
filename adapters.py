@@ -456,6 +456,70 @@ class Sender:
                 raise Rejected("onebot_send_unconfirmed")
             return receipt
 
+    @staticmethod
+    def _is_valid_voice_audio(raw: bytes) -> bool:
+        if raw.startswith((b"ID3", b"OggS", b"#!AMR", b"\x02#!SILK_V3", b"#!SILK_V3")):
+            return True
+        if len(raw) >= 2 and raw[0] == 0xFF and (raw[1] & 0xE0) == 0xE0:
+            return True
+        return len(raw) >= 12 and raw[:4] == b"RIFF" and raw[8:12] == b"WAVE"
+
+    async def send_voice(
+        self,
+        message: Message,
+        audio_bytes: bytes,
+        *,
+        fmt: str = "mp3",
+        duration_ms: int | None = None,
+        proactive: bool = False,
+        before_send=None,
+    ) -> dict:
+        _ = (fmt, duration_ms)
+        if message.platform != "onebot" or not isinstance(audio_bytes, (bytes, bytearray)):
+            raise Rejected("voice_delivery_forbidden")
+        raw = bytes(audio_bytes)
+        if not raw or len(raw) > 2 * 1024 * 1024:
+            raise Rejected("voice_delivery_forbidden")
+        if not self._is_valid_voice_audio(raw):
+            raise Rejected("invalid_voice_audio")
+        if not self._authorized(message, proactive=proactive):
+            raise Rejected("delivery_not_authorized")
+        if proactive and (
+            message.kind != "private"
+            or not self.s.owner_qq_id
+            or not message.conversation_id.isdecimal()
+            or int(message.conversation_id) != int(self.s.owner_qq_id)
+            or message.user_id != self.s.owner_qq_id
+        ):
+            raise Rejected("proactive_not_authorized")
+        file_uri = "base64://" + base64.b64encode(raw).decode("ascii")
+        async with self.send_lock:
+
+            async def still_valid():
+                return (
+                    (before_send is None or await before_send())
+                    and self._authorized(message, proactive=proactive)
+                    and (proactive or time.time() - message.created_at <= self.s.event_ttl_seconds)
+                )
+
+            action = "send_group_msg" if message.kind == "group" else "send_private_msg"
+            field = "group_id" if message.kind == "group" else "user_id"
+            receipt = await self._call_onebot_reply(
+                action,
+                {
+                    field: int(message.conversation_id),
+                    "message": [{"type": "record", "data": {"file": file_uri}}],
+                },
+                before_send=still_valid,
+            )
+            if (
+                not isinstance(receipt, dict)
+                or isinstance(receipt.get("message_id"), bool)
+                or not re.fullmatch(r"-?[0-9]{1,30}", str(receipt.get("message_id", "")))
+            ):
+                raise Rejected("onebot_send_unconfirmed")
+            return receipt
+
     async def send_emoji_like(
         self, message: Message, target_message_id: str, emoji_id: str, *, before_send=None
     ) -> bool:
