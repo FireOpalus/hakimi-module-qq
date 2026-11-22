@@ -66,6 +66,7 @@ def onebot_message(payload: dict, settings: Settings) -> Message | None:
         addressed=addressed,
         images=rich.images,
         files=rich.files,
+        audios=rich.audios,
         video_ids=rich.video_ids,
         short_urls=rich.short_urls,
         forward_ids=rich.forward_ids,

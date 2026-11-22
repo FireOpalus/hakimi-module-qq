@@ -28,6 +28,7 @@ ACTIONS |= {
     "delete_friend",
     "set_self_longnick",
     "get_image",
+    "get_record",
     "get_file",
     "get_msg",
     "set_input_status",
@@ -37,6 +38,8 @@ ACTIONS |= {
     "friend_poke",
     "send_poke",
 }
+_VALID_RECORD_FILE_RE = re.compile(r"^[A-Za-z0-9_{}=+\-][A-Za-z0-9_.{}=+\-]{0,1023}$")
+_ALLOWED_RECORD_OUT_FORMATS = frozenset({"mp3", "wav", "ogg", "amr", "flac", "m4a"})
 EventHandler = Callable[[dict], Awaitable[str]]
 
 
@@ -74,6 +77,16 @@ def response_data(value: dict, action: str = "") -> dict | list:
 def validate_action(settings, action, params):
     if action not in ACTIONS:
         raise Rejected("onebot_action_forbidden")
+    if action == "get_record":
+        file_id = params.get("file") if isinstance(params, dict) else None
+        out_format = params.get("out_format") if isinstance(params, dict) else None
+        if (
+            not isinstance(file_id, str)
+            or not _VALID_RECORD_FILE_RE.fullmatch(file_id)
+            or ".." in file_id
+            or (out_format is not None and out_format not in _ALLOWED_RECORD_OUT_FORMATS)
+        ):
+            raise Rejected("onebot_action_forbidden")
     if action == "send_group_forward_msg":
         target = str(params.get("group_id", ""))
         nodes = params.get("messages", [])
@@ -155,11 +168,16 @@ class HTTPTransport:
         if not self.module_enabled():
             raise Rejected("module_disabled")
         validate_action(self.s, action, params)
+        max_bytes = (
+            max(self.s.max_body_bytes, self.s.ws_max_frame_bytes)
+            if action == "get_record"
+            else self.s.max_body_bytes
+        )
         value = await bounded_json(
             self.http,
             "POST",
             self.s.onebot_api_base.rstrip("/") + "/" + action,
-            max_bytes=self.s.max_body_bytes,
+            max_bytes=max_bytes,
             headers={"Authorization": "Bearer " + self.s.onebot_access_token.get_secret_value()},
             json=params,
         )
