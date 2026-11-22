@@ -15,6 +15,29 @@ from .qq_schedule import QQScheduleOptions
 from .scheduling import ActivityQuota, LocalActivity
 
 
+def register_qq_platform_hooks() -> None:
+    """Register QQ / OneBot policy callbacks into the kernel platform hook registry."""
+    from hakimi.modules.platforms.qq.chat_policy import (
+        permits_chat_export as qq_permits_chat_export,
+    )
+    from hakimi.modules.platforms.qq.chat_policy import (
+        permits_memory_mirror as qq_permits_memory_mirror,
+    )
+    from hakimi.modules.platforms.qq.chat_policy import qq_authorize
+    from hakimi.platform_hooks import PlatformPolicyHooks, register_platform_hooks
+
+    from .qq_audience import allowed_proactive_message
+
+    hooks = PlatformPolicyHooks(
+        authorize=qq_authorize,
+        permits_export=qq_permits_chat_export,
+        permits_memory_mirror=qq_permits_memory_mirror,
+        allowed_proactive=allowed_proactive_message,
+    )
+    for platform in QQSocialModule.chat_platforms:
+        register_platform_hooks(platform, hooks)
+
+
 class QQSocialModule(BaseModule):
     """Summarizes active QQ transport and group ring activity without leaking private content."""
 
@@ -62,6 +85,7 @@ class QQSocialModule(BaseModule):
         connected: Callable[[], bool] | None = None,
     ) -> None:
         super().__init__(settings)
+        register_qq_platform_hooks()
         self._hot_ring = hot_ring or getattr(service, "hot", None)
         self._transport = transport or getattr(getattr(service, "sender", None), "onebot", None)
         self.digest = digest or self._offline
