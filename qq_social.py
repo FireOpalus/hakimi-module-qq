@@ -97,6 +97,16 @@ class QQSocialModule(BaseModule):
     def chat_connected(self, platform: str) -> bool:
         return bool(self.inactive_reason is None and platform == "onebot" and self.connected())
 
+    def bot_id_for(self, platform: str) -> str:
+        if platform == "onebot" and self.settings is not None:
+            return str(getattr(self.settings, "onebot_self_id", "") or "").strip()
+        return ""
+
+    def offline_reason(self, platform: str) -> str:
+        if platform in self.chat_platforms:
+            return "onebot_offline"
+        return super().offline_reason(platform)
+
     def presence_enabled(self) -> bool:
         if self.inactive_reason is not None:
             return False
@@ -197,9 +207,9 @@ class QQSocialModule(BaseModule):
         if not self.settings or not self.settings.onebot_enabled or not self.settings.owner_qq_id:
             return False
         reg = getattr(self, "_registry", None)
-        social_mod = reg.get("social_presence") if reg is not None else None
-        if social_mod is not None:
-            return bool(social_mod.scheduling(config).owner_delivery_enabled)
+        if reg is not None:
+            engine = getattr(self._service, "life_engine", None) if self._service else None
+            return reg.owner_delivery_enabled(config, settings=self.settings, engine=engine)
         return bool(
             getattr(self.settings, "proactive_dm_enabled", True)
             and getattr(config, "owner_delivery_enabled", True)
@@ -215,12 +225,16 @@ class QQSocialModule(BaseModule):
     async def planning_context(self, service, config, now):
         if not self.settings or not self.settings.onebot_enabled:
             return {"available_groups": [], "owner_dm_available": False}
+        from hakimi.social import owner_binding
+
         from .qq_audience import _allowlisted_groups
 
         reg = getattr(self, "_registry", None)
-        social_mod = reg.get("social_presence") if reg is not None else None
-        if social_mod is not None:
-            delivery_enabled = bool(social_mod.scheduling(config).owner_delivery_enabled)
+        engine = getattr(service, "life_engine", None)
+        if reg is not None:
+            delivery_enabled = reg.owner_delivery_enabled(
+                config, settings=self.settings, engine=engine
+            )
         else:
             delivery_enabled = bool(
                 getattr(self.settings, "proactive_dm_enabled", True)
@@ -230,7 +244,9 @@ class QQSocialModule(BaseModule):
             "available_groups": [
                 "onebot:" + group for group in _allowlisted_groups(self.settings)[:20]
             ],
-            "owner_dm_available": bool(delivery_enabled and self.settings.owner_qq_id),
+            "owner_dm_available": bool(
+                delivery_enabled and owner_binding(self.settings, "onebot") is not None
+            ),
         }
 
     def event_rules(self):
