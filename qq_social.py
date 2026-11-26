@@ -3,16 +3,14 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any
+from typing import Any, Literal
 
-from ..budget_policy import PROACTIVE_LANE
 from ..config import Settings
 from ..hot_ring import HotRing
 from ..thinking_policy import THINKING_LEVELS, ThinkingScene
-from .actions import Action, ActionCall, DailyAction, DailyReceipt, Handler, Outcome
+from .actions import Action, DailyAction, DailyReceipt
 from .base import AttentionLevel, BaseModule, GoalResult, NodeRegion
-from .qq_schedule import QQScheduleOptions
-from .scheduling import ActivityQuota, LocalActivity
+from .scheduling import ScheduleOptions
 
 
 def register_qq_platform_hooks() -> None:
@@ -63,10 +61,12 @@ class QQSocialModule(BaseModule):
     chat_platforms = ("onebot", "qq")
     supports_voice = True
     preferred_voice_format = "mp3"
+    supports_presence = True
+    presence_platforms = ("onebot",)
     admin_panel = "qq"
     display_name = "QQ 社交"
     description = "OneBot 连接、群聊管理与主动私信"
-    schedule_options = QQScheduleOptions
+    schedule_options = ScheduleOptions
     recipient_namespaces = ("owner", "onebot")
     node_region: NodeRegion = "KR"
     attention_level: AttentionLevel = "LOW"
@@ -78,30 +78,60 @@ class QQSocialModule(BaseModule):
         hot_ring: HotRing | None = None,
         transport: Any = None,
         service: Any = None,
-        speak: Handler | None = None,
-        digest: Handler | None = None,
-        preflight=None,
+        speak: Any = None,
+        digest: Any = None,
+        preflight: Any = None,
         proactive=None,
         connected: Callable[[], bool] | None = None,
     ) -> None:
         super().__init__(settings)
         register_qq_platform_hooks()
+        self._service = service
         self._hot_ring = hot_ring or getattr(service, "hot", None)
         self._transport = transport or getattr(getattr(service, "sender", None), "onebot", None)
-        self.digest = digest or self._offline
-        self.speak = speak or self._offline
         self.proactive = proactive or getattr(service, "proactive", None)
-        self.preflight = preflight
-        self.connected = connected or (lambda: False)
-        if service is not None:
-            # Older composition roots supplied the Service object.
-            from .qq_delivery import LifeSpeaker
-            from .qq_policy import QQPolicy
+        self.connected = connected or (
+            service.proactive.onebot_connected if service is not None else (lambda: False)
+        )
 
-            self.digest = service.proactive.world_digest
-            self.speak = LifeSpeaker(service).speak
-            self.preflight = QQPolicy(service).evaluate
-            self.connected = service.proactive.onebot_connected
+    def chat_connected(self, platform: str) -> bool:
+        return bool(self.inactive_reason is None and platform == "onebot" and self.connected())
+
+    def presence_enabled(self) -> bool:
+        if self.inactive_reason is not None:
+            return False
+        longnick = getattr(self._service, "longnick", None) if self._service is not None else None
+        if longnick is None:
+            return False
+        mod_enabled = getattr(longnick, "module_enabled", None)
+        if callable(mod_enabled) and not mod_enabled():
+            return False
+        return bool(getattr(getattr(longnick, "config", None), "enabled", False))
+
+    async def apply_presence(
+        self,
+        mood_text: str,
+        *,
+        kind: Literal["life_block", "digest", "patrol", "chat"] = "life_block",
+    ) -> dict[str, Any] | None:
+        if self.inactive_reason is not None:
+            return None
+        longnick = getattr(self._service, "longnick", None) if self._service is not None else None
+        if longnick is None:
+            return None
+        if kind == "digest":
+            return await longnick.apply_digest(mood_text)
+        if kind == "patrol":
+            return await longnick.apply_patrol(mood_text)
+        if kind == "life_block":
+            if hasattr(longnick, "apply_life_block"):
+                return await longnick.apply_life_block(mood_text)
+            if hasattr(longnick, "apply_patrol"):
+                return await longnick.apply_patrol(mood_text)
+            return None
+        if kind == "chat":
+            return await longnick.update(mood_text, automatic=False)
+        return None
 
     def authorize_chat(self, message, settings, *, bot_exempt=False):
         from hakimi.modules.platforms.qq.chat_policy import qq_authorize
@@ -130,65 +160,7 @@ class QQSocialModule(BaseModule):
         service.proactive.wakeup.set()
 
     def actions(self) -> tuple[Action, ...]:
-        aliases = {
-            "qq_social": (
-                "group_share",
-                "group_chat_share",
-                "owner_silence_care",
-                "owner_desktop_warm_care",
-                "owner_companion",
-                "companion",
-                "check_in",
-                "minecraft_milestone_share",
-                "qq_social_milestone_share",
-                "proactive_share",
-            ),
-            "bilibili_surf": (
-                "group_share",
-                "group_chat_share",
-                "bili_share",
-                "bilibili_surf_milestone_share",
-            ),
-            "minecraft": ("mc_share", "minecraft_milestone_share", "group_share"),
-        }
-        return (
-            Action(
-                name="qq.speak",
-                description=(
-                    "结合近期见闻、B 站冲浪收获或当前会话，去获准的群聊冒泡接话，"
-                    "或给 BOISER 发条日常私聊"
-                ),
-                social=True,
-                budget_lane=PROACTIVE_LANE,
-                window="active",
-                quotas=(
-                    ActivityQuota("owner_dms", "owner_dms_unlimited", owner_only=True),
-                    ActivityQuota(),
-                ),
-                run=self.speak,
-                preflight=self.preflight,
-                unavailable=lambda: None if self.connected() else "onebot_offline",
-                aliases=tuple(
-                    (module, verb, True) for module, verbs in aliases.items() for verb in verbs
-                ),
-            ),
-            Action(
-                name="qq.owner_digest",
-                description="在每晚活跃时段结束前汇总当天的公开冲浪见闻，发给 BOISER 私聊晚安汇报",
-                social=True,
-                owner_only=True,
-                budget_lane=PROACTIVE_LANE,
-                origins=frozenset({"timer"}),
-                reuses_paid_work=self.proactive.has_digest_attempt if self.proactive else None,
-                window="closing",
-                interrupts_focus=True,
-                quotas=(),
-                default_mode="off"
-                if self.settings and not self.settings.daily_digest_enabled
-                else "active",
-                run=self.digest,
-            ),
-        )
+        return ()
 
     async def daily_receipts(self):
         history = await self.proactive.digest_history()
@@ -209,101 +181,60 @@ class QQSocialModule(BaseModule):
             for row in history
         ]
 
-    def schedules(self):
-        if (
-            self.settings
-            and self.settings.owner_delivery_platform == "onebot"
-            and self.settings.onebot_enabled
-            and self.settings.owner_qq_id
-        ):
-            return (
-                DailyAction(
-                    "qq.owner_digest",
-                    at=None,
-                    target_scope="owner:" + self.settings.owner_qq_id,
-                    label="Owner 每日汇报",
-                    receipts=self.daily_receipts
-                    if hasattr(self.proactive, "digest_history")
-                    else None,
-                    enabled=(lambda: self.proactive.configured) if self.proactive else None,
-                    attempted=(lambda day: self.proactive.digest_attempted(day))
-                    if self.proactive
-                    else None,
-                ),
-            )
+    def schedules(self) -> tuple[DailyAction, ...]:
         return ()
 
     def normalize_recipient(self, scope):
+        if self.inactive_reason is not None or not self.settings:
+            return None
         from .qq_audience import _normalize_target_scope
 
-        return _normalize_target_scope(scope, self.settings) if self.settings else None
+        return _normalize_target_scope(scope, self.settings)
 
     def permits_recipient(self, scope, config):
-        return not scope.startswith("owner:") or (
-            self.settings.owner_delivery_platform == "onebot"
-            and self.scheduling(config).owner_delivery_enabled
+        if not scope.startswith("owner:"):
+            return True
+        if not self.settings or not self.settings.onebot_enabled or not self.settings.owner_qq_id:
+            return False
+        reg = getattr(self, "_registry", None)
+        social_mod = reg.get("social_presence") if reg is not None else None
+        if social_mod is not None:
+            return bool(social_mod.scheduling(config).owner_delivery_enabled)
+        return bool(
+            getattr(self.settings, "proactive_dm_enabled", True)
+            and getattr(config, "owner_delivery_enabled", True)
         )
 
-    async def planning_context(self, service, config, now):
+    def proactive_groups(self) -> list[str]:
+        if not self.settings or not self.settings.onebot_enabled:
+            return []
         from .qq_audience import _allowlisted_groups
-        from .qq_policy import _desktop_latest_activity
 
-        options = self.scheduling(config)
-        desktop = await _desktop_latest_activity(service)
+        return [f"onebot:{gid}" for gid in _allowlisted_groups(self.settings)[:20]]
+
+    async def planning_context(self, service, config, now):
+        if not self.settings or not self.settings.onebot_enabled:
+            return {"available_groups": [], "owner_dm_available": False}
+        from .qq_audience import _allowlisted_groups
+
+        reg = getattr(self, "_registry", None)
+        social_mod = reg.get("social_presence") if reg is not None else None
+        if social_mod is not None:
+            delivery_enabled = bool(social_mod.scheduling(config).owner_delivery_enabled)
+        else:
+            delivery_enabled = bool(
+                getattr(self.settings, "proactive_dm_enabled", True)
+                and getattr(config, "owner_delivery_enabled", True)
+            )
         return {
             "available_groups": [
                 "onebot:" + group for group in _allowlisted_groups(self.settings)[:20]
             ],
-            "owner_dm_available": bool(
-                options.owner_delivery_enabled
-                and self.settings.onebot_enabled
-                and self.settings.owner_qq_id
-            ),
-            "desktop_active_recently": bool(
-                desktop["enabled"]
-                and desktop["latest_timestamp"] > 0
-                and 0 <= now - desktop["latest_timestamp"] < options.desktop_active_suppress_seconds
-            ),
+            "owner_dm_available": bool(delivery_enabled and self.settings.owner_qq_id),
         }
 
-    def local_activity(self, context, available, unfunded):
-        if "qq.speak" not in available:
-            return None
-        groups = context.get("available_groups", [])
-        if context.get("current_world_state", {}).get("public_unshared_count", 0) and groups:
-            return LocalActivity(
-                20,
-                {
-                    "target_module": "bilibili_surf",
-                    "action_type": "group_chat_share",
-                    "target_scope": groups[0],
-                    "delay_minutes": 15,
-                    "ttl_minutes": 90,
-                    "intent_note": "有一条还没分享的公开见闻，群里聊得上就说两句",
-                },
-            )
-        if context["desktop_active_recently"] and context["owner_dm_available"]:
-            return LocalActivity(
-                10,
-                {
-                    "target_module": self.module_id,
-                    "action_type": "owner_desktop_warm_care",
-                    "target_scope": "owner:" + self.settings.owner_qq_id,
-                    "delay_minutes": 20,
-                    "ttl_minutes": 90,
-                    "allow_desktop_care": True,
-                    "intent_note": "留意到对方刚在电脑端忙完正事，合适时关心一句注意休息喝水",
-                },
-            )
-        return None
-
     def event_rules(self):
-        from hakimi.modules.platforms.qq.milestones import milestone_sharing
-
-        return (milestone_sharing(self.settings),)
-
-    async def _offline(self, call: ActionCall) -> Outcome:
-        return Outcome("not_dispatched", "onebot_offline")
+        return ()
 
     def _resolve_connection_label(self) -> str:
         transport = self._transport
