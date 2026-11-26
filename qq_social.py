@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import base64
 from collections.abc import Callable
 from typing import Any, Literal
 
 from ..config import Settings
 from ..hot_ring import HotRing
+from ..models import Message
+from ..security import Rejected
+from ..social import confirmed_message_id
 from ..thinking_policy import THINKING_LEVELS, ThinkingScene
 from .actions import Action, DailyAction, DailyReceipt
 from .base import AttentionLevel, BaseModule, GoalResult, NodeRegion
@@ -59,8 +63,14 @@ class QQSocialModule(BaseModule):
         ThinkingScene("owner_companion", "日常陪伴", output_tokens=512),
     )
     chat_platforms = ("onebot", "qq")
+    supports_reply_anchor = True
     supports_voice = True
     preferred_voice_format = "mp3"
+    supports_sticker = True
+    supports_rich_card = True
+    supports_emoji_like = True
+    supports_typing = True
+    supports_quick_ack = True
     supports_presence = True
     presence_platforms = ("onebot",)
     admin_panel = "qq"
@@ -157,6 +167,70 @@ class QQSocialModule(BaseModule):
         from hakimi.modules.platforms.qq.chat_policy import permits_memory_mirror
 
         return permits_memory_mirror(message, settings)
+
+    async def send_media(
+        self,
+        message: Message,
+        media_bytes: bytes,
+        *,
+        kind: Literal["sticker", "card", "image"] = "image",
+        mime_type: str = "image/png",
+        filename: str = "media.png",
+        reply_to: str | None = None,
+        before_send=None,
+    ) -> str:
+        _ = (mime_type, filename, reply_to)
+        if self.inactive_reason is not None:
+            raise Rejected("module_disabled")
+        sender = getattr(self._service, "sender", None) if self._service is not None else None
+        if message.platform != "onebot" or sender is None or not hasattr(sender, "send_meme"):
+            raise Rejected("delivery_not_authorized")
+        if not isinstance(media_bytes, (bytes, bytearray)) or not media_bytes:
+            raise Rejected("invalid_meme_image")
+        data_uri = "base64://" + base64.b64encode(bytes(media_bytes)).decode("ascii")
+        receipt = await sender.send_meme(
+            message,
+            data_uri,
+            before_send=before_send,
+            as_sticker=(kind == "sticker"),
+        )
+        raw_id = receipt.get("message_id") if isinstance(receipt, dict) else receipt
+        if isinstance(raw_id, bool) or raw_id is None:
+            raise Rejected("chat_send_unconfirmed")
+        return confirmed_message_id(str(raw_id))
+
+    async def send_emoji_like(
+        self,
+        message: Message,
+        target_message_id: str,
+        emoji_id: str,
+        *,
+        emoji: str | None = None,
+        before_send=None,
+    ) -> bool:
+        _ = emoji
+        if self.inactive_reason is not None or message.platform != "onebot":
+            return False
+        sender = getattr(self._service, "sender", None) if self._service is not None else None
+        if sender is None or not hasattr(sender, "send_emoji_like"):
+            return False
+        return bool(
+            await sender.send_emoji_like(
+                message,
+                target_message_id,
+                emoji_id,
+                before_send=before_send,
+            )
+        )
+
+    async def send_typing(self, message: Message) -> None:
+        if self.inactive_reason is not None or message.platform != "onebot":
+            return None
+        sender = getattr(self._service, "sender", None) if self._service is not None else None
+        if sender is None or not hasattr(sender, "typing"):
+            return None
+        await sender.typing(message)
+        return None
 
     def admin_status(self, request):
         from ..admin_routes import onebot_connection
