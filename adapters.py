@@ -365,9 +365,9 @@ class Sender:
             except Rejected as exc:
                 if str(exc) != "onebot_action_unsupported":
                     raise  # Unknown delivery can NEVER become an extra image send.
-        from ..text_card import render_card
+        from ..text_card import render_card_async
 
-        image = await asyncio.to_thread(render_card, text)
+        image = await render_card_async(text)
         return await self.send_meme(message, image, before_send=before_send, as_sticker=False)
 
     async def send_card(self, message, text, *, before_send=None):
@@ -378,9 +378,9 @@ class Sender:
             raise Rejected("reply_invalidated")
         if not authorize(message, self.s):
             raise Rejected("reply_invalidated")
-        from ..text_card import render_card
+        from ..text_card import render_card_async
 
-        image = await asyncio.to_thread(render_card, text)
+        image = await render_card_async(text)
         return await self.send_meme(message, image, before_send=before_send, as_sticker=False)
 
     async def send_owner_dm(self, target_user_id: int, text: str, *, before_send=None):
